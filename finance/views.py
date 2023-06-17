@@ -1,7 +1,9 @@
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
-from .models import Bilan, Type
+from .models import Bilan, FinancialMetrics
+from .calcul import autonomie_financiere, solvabilite_generale, capacite_remboursement, actif_total
+from .chart_bar import generate_bar_chart
 from django.contrib import messages
 from django.core.paginator import Paginator
 import datetime
@@ -165,28 +167,53 @@ def bilan_summary(request):
         date__gte=six_months_ago, date_lte=todays_date)
     finalrep = {}
 
-    def get_bilan(bilan):
-        actif_immobilisé = int(request.GET["actif_immobilisé"])
-        stock = int(request.GET["stock"])
-        créances = int(request.GET["créances"])
-        trésorerie_actif = int(request.GET["trésorerie_actif"])
-        capitaux_propre = int(request.GET["capiatux_propre"])
-        dette_de_financement = int(request.GET["dette_de_financement"])
-        dette_à_court_terme = int(request.GET["dette_à_court_terme"])
-        actif = actif_immobilisé + stock + créances + trésorerie_actif
-        passif = capitaux_propre + dette_de_financement + dette_à_court_terme
-        fond_de_roulement = (capitaux_propre + dette_de_financement) - dette_à_court_terme
-        besoin_de_fond_de_roulement = (stock + créances) - dette_à_court_terme
-        trésorerie_net =  fond_de_roulement - besoin_de_fond_de_roulement 
-        financement_permanent = (capitaux_propre + dette_de_financement) / actif_immobilisé
-        autonomie_financiére = capitaux_propre / financement_permanent
-        solvabilité_genérale = actif / (dette_à_court_terme + dette_de_financement)
-        capacité_de_remboursement = capitaux_propre / dette_de_financement
-        return (request, {"Actif": actif}, {"Passif": passif}, {"Fond de roulement": fond_de_roulement }, {"Besoin de fond de roulement": besoin_de_fond_de_roulement},
-                     {"trésorerie_net"}, {"financement permanent" : financement_permanent}, {"Autonomie financiére": autonomie_financiére},
-                     {"solvabilité genérale": solvabilité_genérale}, {"Capacité de remboursement": capacité_de_remboursement})
-    finalrep = get_bilan(bilan)
-    return JsonResponse({"data_bilan":finalrep})
+def get_bilan(bilan):
+    actif_immobilise = int(bilan["actif_immobilisé"])
+    stock = int(bilan["stock"])
+    creances = int(bilan["créances"])
+    tresorerie_actif = int(bilan["trésorerie_actif"])
+    capitaux_propres = int(bilan["capitaux_propre"])
+    dette_de_financement = int(bilan["dette_de_financement"])
+    dette_a_court_terme = int(bilan["dette_à_court_terme"])
+    actif = actif_immobilise + stock + creances + tresorerie_actif
+    passif = capitaux_propres + dette_de_financement + dette_a_court_terme
+    fond_de_roulement = (capitaux_propres + dette_de_financement) - dette_a_court_terme
+    besoin_de_fond_de_roulement = (stock + creances) - dette_a_court_terme
+    tresorerie_net = fond_de_roulement - besoin_de_fond_de_roulement
+    financement_permanent = (capitaux_propres + dette_de_financement) / actif_immobilise
+    autonomie_financiere = capitaux_propres / financement_permanent
+    solvabilite_generale = actif / (dette_a_court_terme + dette_de_financement)
+    capacite_remboursement = capitaux_propres / dette_de_financement
+    
+    financial_metrics = FinancialMetrics.objects.create(
+        capitaux_propres=capitaux_propres,
+        financement_permanent=financement_permanent,
+        autonomie_financiere=autonomie_financiere,
+        actif_total=actif,
+        dettes=passif,
+        solvabilite_generale=solvabilite_generale,
+        dettes_financement=dette_de_financement,
+        dettes_court_terme=dette_a_court_terme,
+        capacite_remboursement=capacite_remboursement,
+        stocks=stock,
+        creances=creances,
+        theorique_actif=tresorerie_actif,
+    )
+    
+    return financial_metrics
 
-def stats_view(request):
-    return render(request, 'finance/stats.html')
+def dashboard(request):
+    # Retrieve the data from the database using the FinancialMetrics model
+    financial_metrics = FinancialMetrics.objects.all()
+
+    # Perform calculations using the retrieved data
+    autonomie = autonomie_financiere(financial_metrics.capitaux_propres, financial_metrics.financement_permanent)
+    solvabilite = solvabilite_generale(financial_metrics.actif_total, financial_metrics.dettes)
+    capacite = capacite_remboursement(financial_metrics.capitaux_propres, financial_metrics.dettes_financement)
+    actif = actif_total(financial_metrics.actif_immobilise, financial_metrics.stocks,
+                        financial_metrics.creances, financial_metrics.theorique_actif)
+
+    # Generate the bar chart using the calculated data
+    generate_bar_chart(financial_metrics.capitaux_propres, financial_metrics.financement_permanent, autonomie)
+
+    return render(request, 'dashboard.html')
